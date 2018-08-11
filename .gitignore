@@ -1,0 +1,9 @@
+.idea
+.vscode
+build
+cmake-build-debug
+.gdb_history
+*.swp
+*.pyc
+*~
+
