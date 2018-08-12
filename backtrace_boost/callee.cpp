@@ -1,11 +1,4 @@
 
-/*
- * Don't forget to modify this def if the backend changes from
- * addr2line to backtrace
- */
-//#define BOOST_STACKTRACE_USE_BACKTRACE 1
-#define BOOST_STACKTRACE_USE_ADDR2LINE 1
-
 #include <boost/stacktrace.hpp>
 
 #include <algorithm>
