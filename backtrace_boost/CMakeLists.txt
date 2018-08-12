@@ -8,8 +8,11 @@ find_package(Boost REQUIRED
     # target-linking option below)
     # then add/remove the corresponding definition before
     # including the boost (public) header
+    # //////// OR ////////
+    # use header-only mode and only define the DVARs
+    # this way GDB can see the boost source code (single-stepping)
 #    stacktrace_backtrace
-    stacktrace_addr2line
+#    stacktrace_addr2line
 )
 add_library(boost_static INTERFACE)
 set_target_properties(boost_static
@@ -28,7 +31,7 @@ set_target_properties(libcallee_boost
     POSITION_INDEPENDENT_CODE 1)
 target_compile_definitions(libcallee_boost
     PRIVATE
-    "BOOST_STACKTRACE_LINK=1"
+#    "BOOST_STACKTRACE_LINK=1"
 #    "BOOST_STACKTRACE_USE_BACKTRACE=1"
     "BOOST_STACKTRACE_USE_ADDR2LINE=1"
 )
@@ -42,6 +45,9 @@ target_link_libraries(libcallee_boost
 
     # dont forget to modify this line if the backend changes
     # from libbacktrace to addr2line
+    # //////// NOTE ////////
+    # I decide to go back to header-only mode so that I
+    # can single-step in the boost code
 #    backtrace
 )
 
