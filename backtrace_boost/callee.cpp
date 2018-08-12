@@ -1,12 +1,12 @@
 
+#include <boost/stacktrace.hpp>
+
 #include <algorithm>
 #include <iostream>
 #include <map>
 #include <string>
 #include <vector>
 #include <utility>
-
-#include <execinfo.h>
 
 using namespace std;
 using GroupType = vector<pair<string, string>>;
@@ -18,21 +18,8 @@ struct Status {
     explicit Status(const T& i_value) : m_flag(i_value) {}
 };
 
-void do_backtrace(int trigger) {
-    constexpr int maxSize = 99;
-    if (trigger > 2) {
-        return;
-    }
-    vector<void *> addresses(maxSize, nullptr);
-    int size = backtrace(addresses.data(), maxSize);
-    char** symbols = backtrace_symbols(addresses.data(), size);
-    if (symbols != nullptr) {
-        for (int i = 0; i < size; ++i)
-        {
-            cout << symbols[i] << endl;
-        }
-        free(symbols);
-    }
+inline void do_backtrace() {
+    std::cout << boost::stacktrace::stacktrace();
 }
 
 Status<int> generator(int& numElements, DictType& o_dict) {
@@ -55,7 +42,7 @@ Status<int> generator(int& numElements, DictType& o_dict) {
             for (int i = 0; i < elem + 1; ++i)
             {
                 group.emplace_back(pair<string, string>{"phrase", "x12"});
-                do_backtrace(numElements);
+                do_backtrace();
                 group.emplace_back(pair<string, string>{"code", "dsm"});
             }
         });
