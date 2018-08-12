@@ -32,8 +32,8 @@ set_target_properties(libcallee_boost
 target_compile_definitions(libcallee_boost
     PRIVATE
 #    "BOOST_STACKTRACE_LINK=1"
-#    "BOOST_STACKTRACE_USE_BACKTRACE=1"
-    "BOOST_STACKTRACE_USE_ADDR2LINE=1"
+    "BOOST_STACKTRACE_USE_BACKTRACE=1"
+#    "BOOST_STACKTRACE_USE_ADDR2LINE=1"
 )
 target_link_libraries(libcallee_boost
     PRIVATE
@@ -48,7 +48,7 @@ target_link_libraries(libcallee_boost
     # //////// NOTE ////////
     # I decide to go back to header-only mode so that I
     # can single-step in the boost code
-#    backtrace
+    backtrace
 )
 
 add_executable(caller_boost
