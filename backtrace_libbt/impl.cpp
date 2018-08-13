@@ -10,17 +10,21 @@
 #include <dlfcn.h>  // -ldl
 #include <cxxabi.h>  // gcc
 
-namespace core {
+namespace {
 
-inline char const *demangle_alloc(char const *name);
+char const *demangle_alloc(char const *name) {
+    int status = 0;
+    std::size_t size = 0;
+    return abi::__cxa_demangle(name, NULL, &size, &status);
+}
 
-inline void demangle_free(char const *name);
+void demangle_free(char const *name) {
+    std::free(const_cast< char * >( name ));
+}
 
-class scoped_demangled_name {
-private:
+struct scoped_demangled_name {
     char const *m_p;
 
-public:
     explicit scoped_demangled_name(char const *name)
         : m_p(demangle_alloc(name)) {
     }
@@ -38,27 +42,13 @@ public:
     scoped_demangled_name &operator=(scoped_demangled_name const &) = delete;
 };
 
-inline char const *demangle_alloc(char const *name) {
-    int status = 0;
-    std::size_t size = 0;
-    return abi::__cxa_demangle(name, NULL, &size, &status);
-}
-
-inline void demangle_free(char const *name) {
-    std::free(const_cast< char * >( name ));
-}
-
-inline std::string demangle(char const *name) {
+std::string demangle(char const *name) {
     scoped_demangled_name demangled_name(name);
     char const *p = demangled_name.get();
     if (!p)
         p = name;
     return p;
 }
-
-} // namespace core
-
-namespace {
 
 struct Frame {
     const void* m_addr;
@@ -113,29 +103,29 @@ std::array<char, 40> to_dec_array(std::size_t value) {
 typedef const void* native_frame_ptr_t;
 
 struct location_from_symbol {
-    ::Dl_info dli_;
+    Dl_info m_dli;
 
     explicit location_from_symbol(const void* addr)
-        : dli_()
+        : m_dli()
     {
-        if (!::dladdr(const_cast<void*>(addr), &dli_)) {
-            dli_.dli_fname = 0;
+        if (! dladdr(const_cast<void*>(addr), &m_dli)) {
+            m_dli.dli_fname = 0;
         }
     }
 
     bool empty() const {
-        return !dli_.dli_fname;
+        return ! m_dli.dli_fname;
     }
 
     const char* name() const {
-        return dli_.dli_fname;
+        return m_dli.dli_fname;
     }
 };
 
 static char to_hex_array_bytes[] = "0123456789ABCDEF";
 
 template<class T>
-inline std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(T addr) {
+std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(T addr) {
     std::array<char, 2 + sizeof(void *) * 2 + 1> ret = {"0x"};
     ret.back() = '\0';
 
@@ -155,7 +145,7 @@ inline std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(T addr) {
     return ret;
 }
 
-inline std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(const void *addr) {
+std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(const void *addr) {
     return to_hex_array(
         reinterpret_cast< std::make_unsigned<std::ptrdiff_t>::type >(addr)
     );
@@ -170,8 +160,7 @@ struct to_string_using_backtrace {
     
     to_string_using_backtrace() {
         state = backtrace_create_state(
-            nullptr, 0, libbacktrace_error_callback, 0
-                );
+            nullptr, 0, libbacktrace_error_callback, 0);
     }
 
     void prepare_function_name(const void* addr) {
@@ -203,7 +192,7 @@ struct to_string_using_backtrace {
         res.clear();
         prepare_function_name(addr);
         if (! res.empty()) {
-            res = core::demangle(res.c_str());
+            res = demangle(res.c_str());
         } else {
             res = to_hex_array(addr).data();
         }
@@ -249,7 +238,7 @@ struct unwind_state {
     native_frame_ptr_t* end;
 };
 
-inline _Unwind_Reason_Code unwind_callback(::_Unwind_Context* context, void* arg) {
+_Unwind_Reason_Code unwind_callback(::_Unwind_Context* context, void* arg) {
     // Note: do not write `::_Unwind_GetIP` because it is a macro on some platforms.
     // Use `_Unwind_GetIP` instead!
     unwind_state* const state = static_cast<unwind_state*>(arg);
@@ -269,14 +258,16 @@ inline _Unwind_Reason_Code unwind_callback(::_Unwind_Context* context, void* arg
     return ::_URC_NO_REASON;
 }
 
-std::size_t collect(native_frame_ptr_t *out_frames, std::size_t max_frames_count, std::size_t skip) {
+std::size_t collect(native_frame_ptr_t *out_frames, 
+                    std::size_t max_frames_count, 
+                    std::size_t skip) {
     std::size_t frames_count = 0;
     if (!max_frames_count) {
         return frames_count;
     }
 
     unwind_state state = {skip + 1, out_frames, out_frames + max_frames_count};
-    ::_Unwind_Backtrace(&unwind_callback, &state);
+    _Unwind_Backtrace(&unwind_callback, &state);
     frames_count = state.current - out_frames;
 
     if (frames_count && out_frames[frames_count - 1] == nullptr) {
