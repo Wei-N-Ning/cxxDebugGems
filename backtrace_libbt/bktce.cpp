@@ -331,7 +331,7 @@ std::basic_ostream<CharT, TraitsT>& operator<<(std::basic_ostream<CharT, TraitsT
 
 }
 
-void do_backtrace() {
+extern "C" void do_backtrace() {
     std::cout << Stacktrace();
 }
 

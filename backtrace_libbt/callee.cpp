@@ -1,4 +1,6 @@
 
+#include "bktce.h"
+
 #include <algorithm>
 #include <iostream>
 #include <map>
@@ -9,8 +11,6 @@
 using namespace std;
 using GroupType = vector<pair<string, string>>;
 using DictType = map<int, GroupType>;
-
-extern void do_backtrace();
 
 template<typename T>
 struct Status {
