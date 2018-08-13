@@ -163,9 +163,16 @@ inline std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(const void *add
 
 struct to_string_using_backtrace {
     std::string res;
-    ::backtrace_state* state;
+
+    backtrace_state* state;
     std::string filename;
     std::size_t line;
+    
+    to_string_using_backtrace() {
+        state = backtrace_create_state(
+            nullptr, 0, libbacktrace_error_callback, 0
+                );
+    }
 
     void prepare_function_name(const void* addr) {
         pc_data data = {&res, &filename, 0};
