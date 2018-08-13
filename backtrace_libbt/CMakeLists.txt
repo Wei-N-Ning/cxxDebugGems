@@ -10,6 +10,10 @@ set_target_properties(bktce_self
     CXX_STANDARD 11
     POSITION_INDEPENDENT_CODE 1
     )
+target_include_directories(bktce_self
+    PRIVATE
+    libbacktrace/include
+    )
 
 # source:
 # stackoverflow: combining several static libraries into one using cmake
@@ -38,7 +42,6 @@ set_target_properties(bktce
 target_include_directories(bktce
     INTERFACE
     .
-    libbacktrace
     )
 target_link_libraries(bktce
     INTERFACE
