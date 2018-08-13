@@ -38,6 +38,7 @@ set_target_properties(bktce
 target_include_directories(bktce
     INTERFACE
     .
+    libbacktrace
     )
 target_link_libraries(bktce
     INTERFACE
