@@ -10,55 +10,60 @@
 #include <dlfcn.h>  // -ldl
 #include <cxxabi.h>  // gcc
 
+using bool_t = bool;
+using string_t = std::string;
+using native_frame_ptr_t = const void*;
+
 namespace {
 
-char const *demangle_alloc(char const *name) {
-    int status = 0;
-    std::size_t size = 0;
-    return abi::__cxa_demangle(name, NULL, &size, &status);
-}
-
-void demangle_free(char const *name) {
-    std::free(const_cast< char * >( name ));
-}
-
-struct scoped_demangled_name {
-    char const *m_p;
-
-    explicit scoped_demangled_name(char const *name)
-        : m_p(demangle_alloc(name)) {
+class DemangledSymbol {
+public:
+    explicit DemangledSymbol(const char* i_symbol) {
+        int status = 0;
+        std::size_t size = 0;
+        m_characters = abi::__cxa_demangle(i_symbol, nullptr, &size, &status);
     }
 
-    ~scoped_demangled_name() {
-        demangle_free(m_p);
+    //! the instance of this class is not copyable
+    DemangledSymbol(DemangledSymbol const &) = delete;
+    DemangledSymbol &operator=(DemangledSymbol const &) = delete;
+
+    ~DemangledSymbol() {
+        std::free(m_characters);
     }
 
-    char const *get() const {
-        return m_p;
+    char* get() const {
+        return m_characters;
     }
 
-    scoped_demangled_name(scoped_demangled_name const &) = delete;
-
-    scoped_demangled_name &operator=(scoped_demangled_name const &) = delete;
+private:
+    char* m_characters;
 };
 
-std::string demangle(char const *name) {
-    scoped_demangled_name demangled_name(name);
-    char const *p = demangled_name.get();
-    if (!p)
-        p = name;
+string_t demangle(const char* i_symbol) {
+    DemangledSymbol demangledSymbol(i_symbol);
+    char* p = demangledSymbol.get();
+    if (!p) {
+        return i_symbol;
+    }
     return p;
 }
 
-struct Frame {
-    const void* m_addr;
+class Frame {
+public:
+    explicit Frame(native_frame_ptr_t addr) : m_native(addr) {}
 
-    explicit Frame(const void* addr) : m_addr(addr) {}
+    native_frame_ptr_t get() const {
+        return m_native;
+    }
+
+private:
+    native_frame_ptr_t m_native;
 };
 
 struct pc_data {
-    std::string* function;
-    std::string* filename;
+    string_t* function;
+    string_t* filename;
     std::size_t line;
 };
 
@@ -100,16 +105,13 @@ std::array<char, 40> to_dec_array(std::size_t value) {
     return ret;
 }
 
-typedef const void* native_frame_ptr_t;
-
-struct location_from_symbol {
-    Dl_info m_dli;
-
-    explicit location_from_symbol(const void* addr)
+class LocationFromSymbol {
+public:
+    explicit LocationFromSymbol(native_frame_ptr_t i_address)
         : m_dli()
     {
-        if (! dladdr(const_cast<void*>(addr), &m_dli)) {
-            m_dli.dli_fname = 0;
+        if (! dladdr(const_cast<void*>(i_address), &m_dli)) {
+            m_dli.dli_fname = nullptr;
         }
     }
 
@@ -120,6 +122,9 @@ struct location_from_symbol {
     const char* name() const {
         return m_dli.dli_fname;
     }
+
+private:
+    Dl_info m_dli;
 };
 
 static char to_hex_array_bytes[] = "0123456789ABCDEF";
@@ -145,78 +150,86 @@ std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(T addr) {
     return ret;
 }
 
-std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(const void *addr) {
+std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(native_frame_ptr_t i_address) {
     return to_hex_array(
-        reinterpret_cast< std::make_unsigned<std::ptrdiff_t>::type >(addr)
+        reinterpret_cast< std::make_unsigned<std::ptrdiff_t>::type >(i_address)
     );
 }
 
-struct to_string_using_backtrace {
-    std::string res;
-
-    backtrace_state* state;
-    std::string filename;
-    std::size_t line;
-    
-    to_string_using_backtrace() {
-        state = backtrace_create_state(
+//! Uses GCC libbacktrace to translate an address in .text section to
+//! a location in the source code;
+//! Requires the target to provide debug symbols
+class AddressToSourceTranslator {
+public:
+    AddressToSourceTranslator() {
+        m_backtraceState = backtrace_create_state(
             nullptr, 0, libbacktrace_error_callback, 0);
     }
 
-    void prepare_function_name(const void* addr) {
-        pc_data data = {&res, &filename, 0};
-        if (state) {
-            backtrace_pcinfo(
-                state,
-                reinterpret_cast<uintptr_t>(addr),
-                &libbacktrace_full_callback,
-                &libbacktrace_error_callback,
-                &data
-            );
-        }
-        line = data.line;
-    }
-
-    bool prepare_source_location(const void* /*addr*/) {
-        if (filename.empty() || !line) {
-            return false;
-        }
-        res += " at ";
-        res += filename;
-        res += ':';
-        res += to_dec_array(line).data();
-        return true;
-    }
-
-    std::string operator()(native_frame_ptr_t addr) {
-        res.clear();
-        prepare_function_name(addr);
-        if (! res.empty()) {
-            res = demangle(res.c_str());
+    string_t translate(native_frame_ptr_t addr) {
+        m_formattedText.clear();
+        getSourceCodeInfo(addr);
+        if (! m_formattedText.empty()) {
+            m_formattedText = demangle(m_formattedText.c_str());
         } else {
-            res = to_hex_array(addr).data();
+            m_formattedText = to_hex_array(addr).data();
         }
 
-        if (prepare_source_location(addr)) {
-            return res;
+        //! successful translation
+        if (formatSourceCodeInfo()) {
+            return m_formattedText;
         }
 
-        location_from_symbol loc(addr);
+        //! unsuccessful translation
+        LocationFromSymbol loc(addr);
         if (!loc.empty()) {
-            res += " in ";
-            res += loc.name();
+            m_formattedText += " in ";
+            m_formattedText += loc.name();
         }
 
-        return res;
+        return m_formattedText;
     }
 
+private:
+    void getSourceCodeInfo(native_frame_ptr_t i_addr);
+    bool formatSourceCodeInfo();
+
+    string_t m_formattedText;
+    backtrace_state* m_backtraceState = nullptr;
+    string_t m_filename;
+    std::size_t m_lineNumber = 0;
 };
 
-std::string to_string(const Frame* frames, std::size_t size) {
-    std::string res;
+void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_addr) {
+    pc_data data = {&m_formattedText, &m_filename, 0};
+    if (m_backtraceState) {
+        backtrace_pcinfo(
+            m_backtraceState,
+            reinterpret_cast<uintptr_t>(i_addr),
+            &libbacktrace_full_callback,
+            &libbacktrace_error_callback,
+            &data
+        );
+    }
+    m_lineNumber = data.line;
+}
+
+bool AddressToSourceTranslator::formatSourceCodeInfo() {
+    if (m_filename.empty() || !m_lineNumber) {
+        return false;
+    }
+    m_formattedText += " at ";
+    m_formattedText += m_filename;
+    m_formattedText += ':';
+    m_formattedText += to_dec_array(m_lineNumber).data();
+    return true;
+}
+
+string_t to_string(const Frame* frames, std::size_t size) {
+    string_t res;
     res.reserve(64 * size);
 
-    to_string_using_backtrace impl;
+    AddressToSourceTranslator translator;
 
     for (std::size_t i = 0; i < size; ++i) {
         if (i < 10) {
@@ -225,108 +238,195 @@ std::string to_string(const Frame* frames, std::size_t size) {
         res += to_dec_array(i).data();
         res += '#';
         res += ' ';
-        res += impl(frames[i].m_addr);
+        res += translator.translate(frames[i].get());
         res += '\n';
     }
 
     return res;
 }
 
-struct unwind_state {
-    std::size_t frames_to_skip;
-    native_frame_ptr_t* current;
-    native_frame_ptr_t* end;
+//! used as argument by _Unwind_Backtrace and its callback function;
+//! current and end delineates the array that holds the collected
+//! native frame pointers
+class UnwindState {
+public:
+    UnwindState(std::size_t i_numSkippedFrames,
+                native_frame_ptr_t* i_pointerArray,
+                std::size_t i_pointerArraySize);
+
+    std::size_t m_numSkippedFrames;
+    native_frame_ptr_t* m_current;
+    native_frame_ptr_t* m_end;
 };
 
-_Unwind_Reason_Code unwind_callback(::_Unwind_Context* context, void* arg) {
-    // Note: do not write `::_Unwind_GetIP` because it is a macro on some platforms.
-    // Use `_Unwind_GetIP` instead!
-    unwind_state* const state = static_cast<unwind_state*>(arg);
-    if (state->frames_to_skip) {
-        --state->frames_to_skip;
-        return _Unwind_GetIP(context) ? ::_URC_NO_REASON : ::_URC_END_OF_STACK;
-    }
-
-    *state->current =  reinterpret_cast<native_frame_ptr_t>(
-        _Unwind_GetIP(context)
-    );
-
-    ++state->current;
-    if (!*(state->current - 1) || state->current == state->end) {
-        return ::_URC_END_OF_STACK;
-    }
-    return ::_URC_NO_REASON;
+UnwindState::UnwindState(std::size_t i_numSkippedFrames,
+                         native_frame_ptr_t* i_pointerArray,
+                         std::size_t i_pointerArraySize)
+    : m_numSkippedFrames(i_numSkippedFrames),
+      m_current(i_pointerArray),
+      m_end(i_pointerArray + i_pointerArraySize) {
 }
 
-std::size_t collect(native_frame_ptr_t *out_frames, 
-                    std::size_t max_frames_count, 
-                    std::size_t skip) {
-    std::size_t frames_count = 0;
-    if (!max_frames_count) {
-        return frames_count;
+//! this is the callback function passed to _Unwind_Backtrace;
+//! its role is to tell _Unwind_Backtrace to continue iterating the
+//! stack frames or stop;
+//! according to libbacktrace/unwind.h
+//! to continue: return _URC_NO_REASON
+//! to stop: return _URC_END_OF_STACK
+_Unwind_Reason_Code unwindCallback(_Unwind_Context* i_context, void* i_state) {
+
+    UnwindState* state = nullptr;
+
+    //! identify the end of stack condition if the stack is empty
+    //! this can happen if the target is compiled with -fomit-frame-pointer
+    //! or other equivalent option
+    if (! i_state) {
+        return _URC_END_OF_STACK;
     }
+    state = static_cast<UnwindState *>(i_state);
 
-    unwind_state state = {skip + 1, out_frames, out_frames + max_frames_count};
-    _Unwind_Backtrace(&unwind_callback, &state);
-    frames_count = state.current - out_frames;
-
-    if (frames_count && out_frames[frames_count - 1] == nullptr) {
-        --frames_count;
-    }
-
-    return frames_count;
-}
-
-struct Stacktrace {
-
-    Stacktrace() {
-        init();
-    }
-
-    bool isValid() const {
-        return ! m_frames.empty();
-    }
-
-    const std::vector<Frame>& as_vector() const {
-        return m_frames;
-    }
-    
-    std::size_t size() const {
-        return m_frames.size();
-    }
-    
-    void init() {
-        std::vector<native_frame_ptr_t > buf(m_maxStackSize, nullptr);
-        std::size_t frames_count = collect(&buf[0], buf.size(), 1);
-        fill(&buf[0], frames_count);
-    }
-
-    void fill(native_frame_ptr_t* begin, std::size_t size) {
-        if (!size) {
-            return;
-        }
-
-        m_frames.reserve(static_cast<std::size_t>(size));
-        for (std::size_t i = 0; i < size; ++i) {
-            if (!begin[i]) {
-                return;
-            }
-            m_frames.emplace_back(begin[i]);
+    //! to skip the first N frames
+    //! note that while skipping, it can already reach the end of the stack
+    if (state->m_numSkippedFrames) {
+        state->m_numSkippedFrames -= 1;
+        if (_Unwind_GetIP(i_context)) {
+            return _URC_NO_REASON;
+        } else {
+            return _URC_END_OF_STACK;
         }
     }
 
-    static constexpr int m_maxStackSize = 128;
+    //! during iteration;
+    //! populate the state structure fields
+    *state->m_current =  reinterpret_cast<native_frame_ptr_t>(_Unwind_GetIP(i_context));
+    state->m_current += 1;
+
+    //! identify the end of stack condition
+    if (!*(state->m_current - 1) || state->m_current == state->m_end) {
+        return _URC_END_OF_STACK;
+    }
+
+    //! continue iteration
+    return _URC_NO_REASON;
+}
+
+//! this is core of stacktrace: to iterate over the frames on the runtime
+//! stack; this function wraps GCC libbacktrace's _Unwind_Backtrace();
+//! the later expects a pre-allocated contiguous buffer (an array) marked
+//! by o_pointerArray and pointerArraySize and sets the frame pointer
+//! to each element from the interior the exterior;
+//! if i_numSkippedFrames is larger than 0, the first N frames are
+//! skipped; this mechanism helps the implementer to hide the bootstrapping
+//! functions (see the details in Stacktrace class)
+//!
+//! returns the actual number of frames collected
+std::size_t collectNativeFramePointers(std::size_t i_pointerArraySize,
+                                       std::size_t i_numSkippedFrames,
+                                       native_frame_ptr_t* o_pointerArray) {
+    std::size_t numFramesCollected = 0;
+    UnwindState state(i_numSkippedFrames, o_pointerArray, i_pointerArraySize);
+    _Unwind_Backtrace(&unwindCallback, &state);
+
+    //! calculate the number of collected frames (they could completely
+    //! fill or partially fill the given array)
+    numFramesCollected = 0;
+    for (std::size_t i = 0; i < i_pointerArraySize; ++i) {
+        if (o_pointerArray[i] == nullptr) {
+            break;
+        }
+        numFramesCollected++;
+    }
+    return numFramesCollected;
+}
+
+//! This class is the textural representation of a runtime stack;
+//! It holds the information of each frame and provides accessor methods;
+//! Note that if the target is built with omit-frame-pointer (or other
+//! equivalent option) this class may fail to see any frame
+class Stacktrace {
+public:
+    Stacktrace();
+
+    //! holds any frame or not
+    bool isValid() const;
+
+    //! access each frame from the interior to the exterior;
+    const std::vector<Frame>& getFrames() const;
+    
+    std::size_t size() const;
+
+    //! about the hardcoded max stack size:
+    //! 128 is seen in boost's implementation (1.68.0);
+    //! however in a deep recursion (such as the linear optimization
+    //! algorithm) the number of frames could go beyond 128 even 256,
+    //! hence the choice of 512 here
+    static constexpr int m_maxStackSize = 512;
+
+private:
+    //! initialize our frame container
+    void initialize();
+
+    //! iterates over the native frame pointers and populate our frame
+    //! container
+    void populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size);
 
     std::vector<Frame> m_frames;
 };
 
-template <class CharT, class TraitsT>
-std::basic_ostream<CharT, TraitsT>& operator<<(std::basic_ostream<CharT, TraitsT>& os, const Stacktrace& st) {
-    if (st.isValid()) {
-        os << to_string(&(st.as_vector()[0]), st.size());
-    }
+Stacktrace::Stacktrace() {
+    initialize();
+}
 
-    return os;
+bool Stacktrace::isValid() const {
+    return ! m_frames.empty();
+}
+
+const std::vector<Frame>& Stacktrace::getFrames() const {
+    return m_frames;
+}
+
+std::size_t Stacktrace::size() const {
+    return m_frames.size();
+}
+
+void Stacktrace::initialize() {
+    std::vector<native_frame_ptr_t> buf(m_maxStackSize, nullptr);
+
+    //! numSkippedFrames:
+    //! we skip the first 4 frames:
+    //! 1) the call to ostream << Stacktrace()
+    //! 2) the call to initialize()
+    //! 3) the call to populateFrames()
+    //! 4) the call to collectNativeFramePointers()
+    std::size_t frames_count = collectNativeFramePointers(m_maxStackSize, 4, &buf[0]);
+    populateFrames(&buf[0], frames_count);
+}
+
+void Stacktrace::populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size) {
+    if (!i_size) {
+        return;
+    }
+    m_frames.reserve(i_size);
+
+    for (std::size_t i = 0; i < i_size; ++i) {
+
+        //! according to libc's man page (man backtrace_symbols)
+        //! if the frame pointer is null, it is the end of the stack
+        if (! i_begin[i]) {
+            return;
+        }
+
+        //! avoid creating temporary frame object
+        m_frames.emplace_back(i_begin[i]);
+    }
+}
+
+template <class CharT, class TraitsT>
+std::basic_ostream<CharT, TraitsT>& operator<<(std::basic_ostream<CharT, TraitsT>& o_os, const Stacktrace& i_stacktrace) {
+    if (i_stacktrace.isValid()) {
+        o_os << to_string(&(i_stacktrace.getFrames()[0]), i_stacktrace.size());
+    }
+    return o_os;
 }
 
 }
