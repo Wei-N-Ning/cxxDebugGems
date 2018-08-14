@@ -1,14 +1,15 @@
 
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <array>
 #include <vector>
 #include <cassert>
 
-#include <unwind.h>  // gcc
-#include <backtrace.h>  // gcc
-#include <dlfcn.h>  // -ldl
-#include <cxxabi.h>  // gcc
+#include <unwind.h>
+#include <backtrace.h>
+#include <dlfcn.h>
+#include <cxxabi.h>
 
 using bool_t = bool;
 using string_t = std::string;
@@ -16,144 +17,92 @@ using native_frame_ptr_t = const void*;
 
 namespace {
 
-class DemangledSymbol {
-public:
-    explicit DemangledSymbol(const char* i_symbol) {
-        int status = 0;
-        std::size_t size = 0;
-        m_characters = abi::__cxa_demangle(i_symbol, nullptr, &size, &status);
-    }
-
-    //! the instance of this class is not copyable
-    DemangledSymbol(DemangledSymbol const &) = delete;
-    DemangledSymbol &operator=(DemangledSymbol const &) = delete;
-
-    ~DemangledSymbol() {
-        std::free(m_characters);
-    }
-
-    char* get() const {
-        return m_characters;
-    }
-
-private:
-    char* m_characters;
-};
-
+//! A helper function to encapsulate symbol-demangling
 string_t demangle(const char* i_symbol) {
-    DemangledSymbol demangledSymbol(i_symbol);
-    char* p = demangledSymbol.get();
-    if (!p) {
+    int status = 0;
+    std::size_t size = 0;
+    char* p = abi::__cxa_demangle(i_symbol, nullptr, &size, &status);
+    
+    //! if demangling has no effect or it fails for some reason, 
+    //! return the original symbol back;
+    if (p == nullptr || status != 0) {
         return i_symbol;
     }
-    return p;
+    
+    string_t tmp(p);
+    std::free(p);
+    return tmp;    
 }
 
+//! A textural representation of an x86_64 runtime stack-frame;
+//! Provides accessor methods to retrieve program counter (PC), source 
+//! code filename and line number if debug symbols are available in 
+//! the target;
+//! It also bookkeeps the native frame pointer so that caller may
+//! use other means to inspect the frame;
 class Frame {
 public:
-    explicit Frame(native_frame_ptr_t addr) : m_native(addr) {}
+    explicit Frame(native_frame_ptr_t addr);
 
-    native_frame_ptr_t get() const {
-        return m_native;
-    }
+    //! Returns the native frame pointer to the caller;
+    native_frame_ptr_t get() const;
 
 private:
     native_frame_ptr_t m_native;
 };
 
-struct pc_data {
+Frame::Frame(native_frame_ptr_t addr) 
+    : m_native(addr) {
+}
+
+native_frame_ptr_t Frame::get() const {
+    return m_native;
+}
+
+//! libbacktrace callback argument
+//! See gcc/libbacktrace/backtrace.h
+struct PCData {
     string_t* function;
     string_t* filename;
     std::size_t line;
 };
 
-int libbacktrace_full_callback(void *data, uintptr_t /*pc*/, const char *filename, int lineno, const char *function) {
-    pc_data& d = *static_cast<pc_data*>(data);
-    if (d.filename && filename) {
-        *d.filename = filename;
+//! libbacktrace callback function;
+//! To retrieve the source code information from the program counter 
+int libbacktrace_full_callback(void* o_data, 
+                               uintptr_t __notused, 
+                               const char* i_filename, 
+                               int i_lineno, 
+                               const char* i_function) {
+    PCData& data = *static_cast<PCData *>(o_data);
+    if (data.filename && i_filename) {
+        *data.filename = i_filename;
     }
-    if (d.function && function) {
-        *d.function = function;
+    if (data.function && i_function) {
+        *data.function = i_function;
     }
-    d.line = lineno;
+    data.line = i_lineno;
     return 0;
 }
 
-void libbacktrace_error_callback(void * /*data*/, const char * /*msg*/, int /*errnum*/) {
+//! libbacktrace callback function;
+//! We don't have a use case where we would need to handle failed 
+//! backtrace operation hence the empty function body;
+void libbacktrace_error_callback(void* __notused1, 
+                                 const char* __notused2, 
+                                 int __notused3) {
 }
 
-std::array<char, 40> to_dec_array(std::size_t value) {
-    std::array<char, 40> ret;
-    if (!value) {
-        ret[0] = '0';
-        ret[1] = '\0';
-        return ret;
+//! Get the binary target's filename from a frame pointer via the gnu 
+//! linker;
+//! This function is called if the translator fails to translate the 
+//! frame pointer to a source code location;
+string_t getBinaryFilename(native_frame_ptr_t i_address) {
+    Dl_info dli;
+    if (! dladdr(const_cast<void*>(i_address), &dli)) {
+        return "";
     }
-
-    std::size_t digits = 0;
-    for (std::size_t value_copy = value; value_copy; value_copy /= 10) {
-        ++digits;
-    }
-
-    for (std::size_t i = 1; i <= digits; ++i) {
-        ret[digits - i] = '0' + (value % 10);
-        value /= 10;
-    }
-
-    ret[digits] = '\0';
-
-    return ret;
-}
-
-class LocationFromSymbol {
-public:
-    explicit LocationFromSymbol(native_frame_ptr_t i_address)
-        : m_dli()
-    {
-        if (! dladdr(const_cast<void*>(i_address), &m_dli)) {
-            m_dli.dli_fname = nullptr;
-        }
-    }
-
-    bool empty() const {
-        return ! m_dli.dli_fname;
-    }
-
-    const char* name() const {
-        return m_dli.dli_fname;
-    }
-
-private:
-    Dl_info m_dli;
-};
-
-static char to_hex_array_bytes[] = "0123456789ABCDEF";
-
-template<class T>
-std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(T addr) {
-    std::array<char, 2 + sizeof(void *) * 2 + 1> ret = {"0x"};
-    ret.back() = '\0';
-
-    const std::size_t s = sizeof(T);
-
-    char *out = ret.data() + s * 2 + 1;
-
-    for (std::size_t i = 0; i < s; ++i) {
-        const unsigned char tmp_addr = (addr & 0xFFu);
-        *out = to_hex_array_bytes[tmp_addr & 0xF];
-        --out;
-        *out = to_hex_array_bytes[tmp_addr >> 4];
-        --out;
-        addr >>= 8;
-    }
-
-    return ret;
-}
-
-std::array<char, 2 + sizeof(void *) * 2 + 1> to_hex_array(native_frame_ptr_t i_address) {
-    return to_hex_array(
-        reinterpret_cast< std::make_unsigned<std::ptrdiff_t>::type >(i_address)
-    );
+    return dli.dli_fname;
 }
 
 //! Uses GCC libbacktrace to translate an address in .text section to
@@ -172,7 +121,9 @@ public:
         if (! m_formattedText.empty()) {
             m_formattedText = demangle(m_formattedText.c_str());
         } else {
-            m_formattedText = to_hex_array(addr).data();
+            std::stringstream ss;
+            ss << std::hex << addr;
+            m_formattedText = ss.str();
         }
 
         //! successful translation
@@ -181,10 +132,10 @@ public:
         }
 
         //! unsuccessful translation
-        LocationFromSymbol loc(addr);
-        if (!loc.empty()) {
+        string_t binaryFilename = getBinaryFilename(addr);
+        if (! binaryFilename.empty()) {
             m_formattedText += " in ";
-            m_formattedText += loc.name();
+            m_formattedText += binaryFilename;
         }
 
         return m_formattedText;
@@ -201,7 +152,11 @@ private:
 };
 
 void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_addr) {
-    pc_data data = {&m_formattedText, &m_filename, 0};
+    PCData data = {
+        &m_formattedText, 
+        &m_filename, 
+        0
+    };
     if (m_backtraceState) {
         backtrace_pcinfo(
             m_backtraceState,
@@ -221,28 +176,24 @@ bool AddressToSourceTranslator::formatSourceCodeInfo() {
     m_formattedText += " at ";
     m_formattedText += m_filename;
     m_formattedText += ':';
-    m_formattedText += to_dec_array(m_lineNumber).data();
+    std::stringstream ss;
+    ss << m_lineNumber;
+    m_formattedText += ss.str();
     return true;
 }
 
 string_t to_string(const Frame* frames, std::size_t size) {
-    string_t res;
-    res.reserve(64 * size);
-
+    std::stringstream ss;
     AddressToSourceTranslator translator;
-
     for (std::size_t i = 0; i < size; ++i) {
         if (i < 10) {
-            res += ' ';
+            ss << ' ';
         }
-        res += to_dec_array(i).data();
-        res += '#';
-        res += ' ';
-        res += translator.translate(frames[i].get());
-        res += '\n';
+        ss << i << "# ";
+        ss << translator.translate(frames[i].get());
+        ss << std::endl;
     }
-
-    return res;
+    return ss.str();
 }
 
 //! used as argument by _Unwind_Backtrace and its callback function;
