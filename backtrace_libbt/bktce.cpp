@@ -35,14 +35,6 @@ string_t demangle(const char* i_symbol) {
     return tmp;    
 }
 
-//! libbacktrace callback argument
-//! See gcc/libbacktrace/backtrace.h
-struct PCData {
-    string_t* function;
-    string_t* filename;
-    std::size_t line;
-};
-
 //! Uses GCC libbacktrace to translate an address in .text section to
 //! a location in the source code;
 //! Requires the target to provide debug symbols
@@ -50,6 +42,14 @@ class AddressToSourceTranslator {
 public:
     AddressToSourceTranslator();
     string_t translate(native_frame_ptr_t i_address);
+
+    //! libbacktrace callback argument
+    //! See gcc/libbacktrace/backtrace.h
+    struct PCData {
+        string_t* function;
+        string_t* filename;
+        std::size_t lineNumber;
+    };
 
     //! callback functions to be passed to GCC's libbacktrace
     static int libbacktrace_full_callback(void*, uintptr_t, const char*, int, const char*);
@@ -113,7 +113,7 @@ int AddressToSourceTranslator::libbacktrace_full_callback(
     if (data.function && i_function) {
         *data.function = i_function;
     }
-    data.line = static_cast<std::size_t>(i_lineno);
+    data.lineNumber = static_cast<std::size_t>(i_lineno);
     return 0;
 }
 
@@ -139,7 +139,7 @@ void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_address) 
             &data
         );
     }
-    m_lineNumber = data.line;
+    m_lineNumber = data.lineNumber;
 }
 
 bool AddressToSourceTranslator::formatSourceCodeInfo() {
