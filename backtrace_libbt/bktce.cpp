@@ -1,20 +1,14 @@
 
+#include "bktce.h"
+
 #include <iostream>
 #include <iomanip>
 #include <sstream>
-#include <string>
-#include <array>
-#include <vector>
-#include <cassert>
 
 #include <unwind.h>
 #include <backtrace.h>
 #include <dlfcn.h>
 #include <cxxabi.h>
-
-using bool_t = bool;
-using string_t = std::string;
-using native_frame_ptr_t = const void*;
 
 namespace {
 
@@ -35,83 +29,39 @@ string_t demangle(const char* i_symbol) {
     return tmp;    
 }
 
-//! Uses GCC libbacktrace to translate an address in .text section to
-//! a location in the source code;
-//! Requires the target to provide debug symbols
-class AddressToSourceTranslator {
-public:
-    AddressToSourceTranslator();
-    string_t translate(native_frame_ptr_t i_address);
+//! Get the binary target's filename from a frame pointer via the gnu 
+//! linker;
+//! This function is called if the translator fails to translate the 
+//! frame pointer to a source code location;
+string_t getBinaryFilenameLD(native_frame_ptr_t i_address) {
+    Dl_info dli;
+    if (! dladdr(const_cast<void*>(i_address), &dli)) {
+        return "";
+    }
+    return dli.dli_fname;
+}
 
-    //! libbacktrace callback argument
-    //! See gcc/libbacktrace/backtrace.h
-    struct PCData {
-        string_t* function;
-        string_t* filename;
-        std::size_t lineNumber;
-    };
-
-    //! callback functions to be passed to GCC's libbacktrace
-    static int libbacktrace_full_callback(void*, uintptr_t, const char*, int, const char*);
-    static void libbacktrace_error_callback(void*, const char*, int);
-
-private:
-    void getSourceCodeInfo(native_frame_ptr_t i_address);
-    bool formatSourceCodeInfo();
-    string_t getBinaryFilename(native_frame_ptr_t i_address);
-
-    //! callback state to be passed to GCC"s libstacktrace
-    backtrace_state* m_backtraceState = nullptr;
-
-    //! textural data collected by the callbacks
-    string_t m_formattedText;
-    string_t m_filename;
-    std::size_t m_lineNumber = 0;
+//! libbacktrace callback argument
+//! See gcc/libbacktrace/backtrace.h
+struct PCData {
+    string_t* function;
+    string_t* filename;
+    std::size_t lineNumber;
 };
-
-AddressToSourceTranslator::AddressToSourceTranslator() {
-    m_backtraceState = backtrace_create_state(nullptr, 
-                                              0, 
-                                              libbacktrace_error_callback, 
-                                              nullptr);
-}
-
-string_t AddressToSourceTranslator::translate(native_frame_ptr_t i_address) {
-    m_formattedText.clear();
-    getSourceCodeInfo(i_address);
-    if (! m_formattedText.empty()) {
-        m_formattedText = demangle(m_formattedText.c_str());
-    } else {
-        std::stringstream ss;
-        ss << std::hex << i_address;
-        m_formattedText = ss.str();
-    }
-
-    //! successful translation
-    if (formatSourceCodeInfo()) {
-        return m_formattedText;
-    }
-
-    //! unsuccessful translation
-    string_t binaryFilename = getBinaryFilename(i_address);
-    if (! binaryFilename.empty()) {
-        m_formattedText += " in ";
-        m_formattedText += binaryFilename;
-    }
-
-    return m_formattedText;
-}
 
 //! libbacktrace callback function;
 //! To retrieve the source code information from the program counter
-int AddressToSourceTranslator::libbacktrace_full_callback(
-    void* o_data, uintptr_t /*not used*/, const char* i_filename, int i_lineno, const char* i_function) {
+int libbacktrace_full_callback(void* o_data, 
+                               uintptr_t /*not used*/, 
+                               const char* i_filename, 
+                               int i_lineno, 
+                               const char* i_function) {
     PCData& data = *static_cast<PCData *>(o_data);
     if (data.filename && i_filename) {
         *data.filename = i_filename;
     }
     if (data.function && i_function) {
-        *data.function = i_function;
+        *data.function = demangle(i_function);
     }
     data.lineNumber = static_cast<std::size_t>(i_lineno);
     return 0;
@@ -120,48 +70,9 @@ int AddressToSourceTranslator::libbacktrace_full_callback(
 //! libbacktrace callback function;
 //! We don't have a use case where we would need to handle failed
 //! backtrace operation hence the empty function body;
-void AddressToSourceTranslator::libbacktrace_error_callback(
-    void* /*not used*/, const char* /*not used*/, int /*not used*/) {
-}
-
-void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_address) {
-    PCData data = {
-        &m_formattedText, 
-        &m_filename, 
-        0
-    };
-    if (m_backtraceState) {
-        backtrace_pcinfo(
-            m_backtraceState,
-            reinterpret_cast<uintptr_t>(i_address),
-            &libbacktrace_full_callback,
-            &libbacktrace_error_callback,
-            &data
-        );
-    }
-    m_lineNumber = data.lineNumber;
-}
-
-bool AddressToSourceTranslator::formatSourceCodeInfo() {
-    if (m_filename.empty() || !m_lineNumber) {
-        return false;
-    }
-    std::stringstream ss;
-    ss << " at " << m_filename << ":" << m_lineNumber;
-    m_formattedText += ss.str();
-    return true;
-}
-
-//! Get the binary target's filename from a frame pointer via the gnu 
-//! linker;
-//! This function is called if the translator fails to translate the 
-//! frame pointer to a source code location;
-string_t AddressToSourceTranslator::getBinaryFilename(native_frame_ptr_t i_address) {
-    Dl_info dli;
-    if (! dladdr(const_cast<void*>(i_address), &dli)) {
-        return "";
-    }
-    return dli.dli_fname;
+void libbacktrace_error_callback(void* /*not used*/, 
+                                 const char* /*not used*/, 
+                                 int /*not used*/) {
 }
 
 //! used as argument by _Unwind_Backtrace and its callback function;
@@ -216,95 +127,61 @@ _Unwind_Reason_Code unwindCallback(_Unwind_Context* i_context, void* i_state) {
     return _URC_NO_REASON;
 }
 
-//! A textural representation of an x86_64 runtime stack-frame;
-//! Provides accessor methods to retrieve program counter (PC), source 
-//! code filename and line number if debug symbols are available in 
-//! the target;
-//! It also bookkeeps the native frame pointer so that caller may
-//! use other means to inspect the frame;
-class Frame {
-public:
-    explicit Frame(native_frame_ptr_t i_address);
-
-    //! Returns the native frame pointer to the caller;
-    native_frame_ptr_t get() const;
-    
-    //! Returns a print-friendly string;
-    string_t toString() const;
-
-private:
-    native_frame_ptr_t m_native;
-};
+}
 
 Frame::Frame(native_frame_ptr_t i_address)
-    : m_native(i_address) {
+ : m_native(i_address) {
+    backtrace_state* backtraceState = backtrace_create_state(
+        nullptr, 
+        0, 
+        &libbacktrace_error_callback, 
+        nullptr);
+    PCData data = {&m_function, &m_sourceFilename, 0};
+    if (backtraceState) {
+        backtrace_pcinfo(
+            backtraceState,
+            reinterpret_cast<uintptr_t>(i_address),
+            &libbacktrace_full_callback,
+            &libbacktrace_error_callback,
+            &data
+        );
+        m_sourceLineNumber = data.lineNumber;
+    }
+    if (! hasSourceInfo()) {
+        m_binaryFilename = getBinaryFilenameLD(m_native);
+    }
 }
 
 native_frame_ptr_t Frame::get() const {
     return m_native;
 }
 
+bool_t Frame::hasSourceInfo() const {
+    return m_sourceFilename.size() > 0 && m_sourceLineNumber > 0;
+}
+
+const string_t& Frame::getSourceFilename() const {
+    return m_sourceFilename;
+}
+    
+const string_t& Frame::getBinaryFilename() const {
+    return m_binaryFilename;
+}
+    
+std::size_t Frame::getSourceLineNumber() const {
+    return m_sourceLineNumber;
+}
+
 string_t Frame::toString() const {
     std::stringstream ss;
-    AddressToSourceTranslator translator;
-    ss << "# " << translator.translate(get()) << std::endl;
+    ss << std::hex << m_native << std::dec << " ";
+    if (hasSourceInfo()) {
+        ss << m_function << " at " << m_sourceFilename << ":" << m_sourceLineNumber;
+    } else {
+        ss << " in " << m_binaryFilename;
+    }
+    ss << std::endl;    
     return ss.str();
-}
-
-//! The textural representation of an x86_64 runtime stack;
-//! It holds the information of each frame and provides accessor methods;
-//! Note that if the target is built with omit-frame-pointer (or other
-//! equivalent option) this class may fail to see any frame
-class Stacktrace {
-public:
-    Stacktrace();
-
-    //! holds any frame or not
-    bool isValid() const;
-
-    //! access each frame from the interior to the exterior;
-    const std::vector<Frame>& getFrames() const;
-    
-    std::size_t size() const;
-
-    //! about the hardcoded max stack size:
-    //! 128 is seen in boost's implementation (1.68.0);
-    //! however in a deep recursion (such as the linear optimization
-    //! algorithm) the number of frames could go beyond 128 even 256,
-    //! hence the choice of 512 here
-    static constexpr int m_maxStackSize = 512;
-
-private:
-    //! initialize our frame container
-    void initialize();
-
-    //! this is core of stacktrace: to iterate over the frames on the runtime
-    //! stack; this function wraps GCC libbacktrace's _Unwind_Backtrace();
-    //! the later expects a pre-allocated contiguous buffer (an array) marked
-    //! by o_pointerArray and pointerArraySize and sets the frame pointer
-    //! to each element from the interior the exterior;
-    //! if i_numSkippedFrames is larger than 0, the first N frames are
-    //! skipped; this mechanism helps the implementer to hide the bootstrapping
-    //! functions (see the details in Stacktrace class)
-    //!
-    //! returns the actual number of frames collected
-    std::size_t collectNativeFramePointers(std::size_t i_pointerArraySize,
-                                           std::size_t i_numSkippedFrames,
-                                           native_frame_ptr_t* o_pointerArray);
-
-    //! iterates over the native frame pointers and populate our frame
-    //! container
-    void populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size);
-
-    std::vector<Frame> m_frames;
-};
-
-Stacktrace::Stacktrace() {
-    initialize();
-}
-
-bool Stacktrace::isValid() const {
-    return ! m_frames.empty();
 }
 
 const std::vector<Frame>& Stacktrace::getFrames() const {
@@ -315,71 +192,59 @@ std::size_t Stacktrace::size() const {
     return m_frames.size();
 }
 
-void Stacktrace::initialize() {
-    std::vector<native_frame_ptr_t> buf(m_maxStackSize, nullptr);
-
-    //! numSkippedFrames:
-    //! we skip the first 4 frames:
-    //! 1) the call to ostream << Stacktrace()
-    //! 2) the call to initialize()
-    //! 3) the call to populateFrames()
-    //! 4) the call to collectNativeFramePointers()
-    std::size_t frames_count = collectNativeFramePointers(m_maxStackSize, 4, &buf[0]);
-    populateFrames(&buf[0], frames_count);
-}
-
-std::size_t Stacktrace::collectNativeFramePointers(std::size_t i_pointerArraySize,
-                                                   std::size_t i_numSkippedFrames,
-                                                   native_frame_ptr_t* o_pointerArray) {
+Stacktrace::Stacktrace(std::size_t i_numSkippedFrames) {
+    
+    //! about the hardcoded max stack size:
+    //! 128 is seen in boost's implementation (1.68.0);
+    //! however in a deep recursion (such as the linear optimization
+    //! algorithm) the number of frames could go beyond 128 even 256,
+    //! hence the choice of 512 here
+    static const int s_maxStackSize = 512;
+    std::vector<native_frame_ptr_t> buf(s_maxStackSize, nullptr);
     std::size_t numFramesCollected = 0;
+
     UnwindState state = {
         i_numSkippedFrames,
-        o_pointerArray,
-        o_pointerArray + i_pointerArraySize,
+        buf.data(),
+        buf.data() + s_maxStackSize,
     };
     _Unwind_Backtrace(&unwindCallback, &state);
 
-    //! calculate the number of collected frames (they could completely
-    //! fill or partially fill the given array)
-    numFramesCollected = 0;
-    for (std::size_t i = 0; i < i_pointerArraySize; ++i) {
-        if (o_pointerArray[i] == nullptr) {
+    //! calculate the number of collected frame pointers
+    for (std::size_t i = 0; i < s_maxStackSize; ++i) {
+        if (buf[i] == nullptr) {
             break;
         }
         numFramesCollected++;
     }
-    return numFramesCollected;
-}
-
-void Stacktrace::populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size) {
-    if (!i_size) {
+    
+    //! can not see any frame 
+    if (! numFramesCollected) {
         return;
     }
-    m_frames.reserve(i_size);
 
-    for (std::size_t i = 0; i < i_size; ++i) {
+    m_frames.reserve(numFramesCollected);
+    for (std::size_t i = 0; i < numFramesCollected; ++i) {
 
-        //! according to libc's man page (man backtrace_symbols)
         //! if the frame pointer is null, it is the end of the stack
-        if (! i_begin[i]) {
+        if (! buf[i]) {
             return;
         }
 
-        //! avoid creating temporary frame object
-        m_frames.emplace_back(i_begin[i]);
+        //! create the Frame object
+        m_frames.emplace_back(buf[i]);
     }
 }
 
-}
-
-extern "C" void do_backtrace() {
+void simple_backtrace() {
     Stacktrace st;
-    if (! st.isValid()) {
+    if (st.size() == 0) {
         return;
     }
     int index = 0;
     for (const Frame& fr : st.getFrames()) {
         std::cout << std::right << std::setfill(' ') << std::setw(3) << index;
+        std::cout << "# ";
         std::cout << fr.toString();
         index += 1;
     }

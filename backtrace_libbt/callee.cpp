@@ -38,7 +38,7 @@ Status<int> generator(int& numElements, DictType& o_dict) {
             for (int i = 0; i < elem + 1; ++i)
             {
                 group.emplace_back(pair<string, string>{"phrase", "x12"});
-                do_backtrace();
+                simple_backtrace();
                 group.emplace_back(pair<string, string>{"code", "dsm"});
             }
         });
