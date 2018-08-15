@@ -1,5 +1,6 @@
 
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <array>
@@ -32,31 +33,6 @@ string_t demangle(const char* i_symbol) {
     string_t tmp(p);
     std::free(p);
     return tmp;    
-}
-
-//! A textural representation of an x86_64 runtime stack-frame;
-//! Provides accessor methods to retrieve program counter (PC), source 
-//! code filename and line number if debug symbols are available in 
-//! the target;
-//! It also bookkeeps the native frame pointer so that caller may
-//! use other means to inspect the frame;
-class Frame {
-public:
-    explicit Frame(native_frame_ptr_t addr);
-
-    //! Returns the native frame pointer to the caller;
-    native_frame_ptr_t get() const;
-
-private:
-    native_frame_ptr_t m_native;
-};
-
-Frame::Frame(native_frame_ptr_t addr) 
-    : m_native(addr) {
-}
-
-native_frame_ptr_t Frame::get() const {
-    return m_native;
 }
 
 //! libbacktrace callback argument
@@ -93,63 +69,57 @@ void libbacktrace_error_callback(void* __notused1,
                                  int __notused3) {
 }
 
-//! Get the binary target's filename from a frame pointer via the gnu 
-//! linker;
-//! This function is called if the translator fails to translate the 
-//! frame pointer to a source code location;
-string_t getBinaryFilename(native_frame_ptr_t i_address) {
-    Dl_info dli;
-    if (! dladdr(const_cast<void*>(i_address), &dli)) {
-        return "";
-    }
-    return dli.dli_fname;
-}
-
 //! Uses GCC libbacktrace to translate an address in .text section to
 //! a location in the source code;
 //! Requires the target to provide debug symbols
 class AddressToSourceTranslator {
 public:
-    AddressToSourceTranslator() {
-        m_backtraceState = backtrace_create_state(
-            nullptr, 0, libbacktrace_error_callback, 0);
-    }
-
-    string_t translate(native_frame_ptr_t addr) {
-        m_formattedText.clear();
-        getSourceCodeInfo(addr);
-        if (! m_formattedText.empty()) {
-            m_formattedText = demangle(m_formattedText.c_str());
-        } else {
-            std::stringstream ss;
-            ss << std::hex << addr;
-            m_formattedText = ss.str();
-        }
-
-        //! successful translation
-        if (formatSourceCodeInfo()) {
-            return m_formattedText;
-        }
-
-        //! unsuccessful translation
-        string_t binaryFilename = getBinaryFilename(addr);
-        if (! binaryFilename.empty()) {
-            m_formattedText += " in ";
-            m_formattedText += binaryFilename;
-        }
-
-        return m_formattedText;
-    }
+    AddressToSourceTranslator();
+    string_t translate(native_frame_ptr_t addr);
 
 private:
     void getSourceCodeInfo(native_frame_ptr_t i_addr);
     bool formatSourceCodeInfo();
+    string_t getBinaryFilename(native_frame_ptr_t i_address);
 
     string_t m_formattedText;
     backtrace_state* m_backtraceState = nullptr;
     string_t m_filename;
     std::size_t m_lineNumber = 0;
 };
+
+AddressToSourceTranslator::AddressToSourceTranslator() {
+    m_backtraceState = backtrace_create_state(nullptr, 
+                                              0, 
+                                              libbacktrace_error_callback, 
+                                              0);
+}
+
+string_t AddressToSourceTranslator::translate(native_frame_ptr_t addr) {
+    m_formattedText.clear();
+    getSourceCodeInfo(addr);
+    if (! m_formattedText.empty()) {
+        m_formattedText = demangle(m_formattedText.c_str());
+    } else {
+        std::stringstream ss;
+        ss << std::hex << addr;
+        m_formattedText = ss.str();
+    }
+
+    //! successful translation
+    if (formatSourceCodeInfo()) {
+        return m_formattedText;
+    }
+
+    //! unsuccessful translation
+    string_t binaryFilename = getBinaryFilename(addr);
+    if (! binaryFilename.empty()) {
+        m_formattedText += " in ";
+        m_formattedText += binaryFilename;
+    }
+
+    return m_formattedText;
+}
 
 void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_addr) {
     PCData data = {
@@ -173,27 +143,22 @@ bool AddressToSourceTranslator::formatSourceCodeInfo() {
     if (m_filename.empty() || !m_lineNumber) {
         return false;
     }
-    m_formattedText += " at ";
-    m_formattedText += m_filename;
-    m_formattedText += ':';
     std::stringstream ss;
-    ss << m_lineNumber;
+    ss << " at " << m_filename << ":" << m_lineNumber;
     m_formattedText += ss.str();
     return true;
 }
 
-string_t to_string(const Frame* frames, std::size_t size) {
-    std::stringstream ss;
-    AddressToSourceTranslator translator;
-    for (std::size_t i = 0; i < size; ++i) {
-        if (i < 10) {
-            ss << ' ';
-        }
-        ss << i << "# ";
-        ss << translator.translate(frames[i].get());
-        ss << std::endl;
+//! Get the binary target's filename from a frame pointer via the gnu 
+//! linker;
+//! This function is called if the translator fails to translate the 
+//! frame pointer to a source code location;
+string_t AddressToSourceTranslator::getBinaryFilename(native_frame_ptr_t i_address) {
+    Dl_info dli;
+    if (! dladdr(const_cast<void*>(i_address), &dli)) {
+        return "";
     }
-    return ss.str();
+    return dli.dli_fname;
 }
 
 //! used as argument by _Unwind_Backtrace and its callback function;
@@ -290,7 +255,42 @@ std::size_t collectNativeFramePointers(std::size_t i_pointerArraySize,
     return numFramesCollected;
 }
 
-//! This class is the textural representation of a runtime stack;
+//! A textural representation of an x86_64 runtime stack-frame;
+//! Provides accessor methods to retrieve program counter (PC), source 
+//! code filename and line number if debug symbols are available in 
+//! the target;
+//! It also bookkeeps the native frame pointer so that caller may
+//! use other means to inspect the frame;
+class Frame {
+public:
+    explicit Frame(native_frame_ptr_t addr);
+
+    //! Returns the native frame pointer to the caller;
+    native_frame_ptr_t get() const;
+    
+    //! Returns a print-friendly string;
+    string_t toString() const;
+
+private:
+    native_frame_ptr_t m_native;
+};
+
+Frame::Frame(native_frame_ptr_t addr) 
+    : m_native(addr) {
+}
+
+native_frame_ptr_t Frame::get() const {
+    return m_native;
+}
+
+string_t Frame::toString() const {
+    std::stringstream ss;
+    AddressToSourceTranslator translator;
+    ss << "# " << translator.translate(get()) << std::endl;
+    return ss.str();
+}
+
+//! The textural representation of an x86_64 runtime stack;
 //! It holds the information of each frame and provides accessor methods;
 //! Note that if the target is built with omit-frame-pointer (or other
 //! equivalent option) this class may fail to see any frame
@@ -372,17 +372,16 @@ void Stacktrace::populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size)
     }
 }
 
-template <class CharT, class TraitsT>
-std::basic_ostream<CharT, TraitsT>& operator<<(std::basic_ostream<CharT, TraitsT>& o_os, const Stacktrace& i_stacktrace) {
-    if (i_stacktrace.isValid()) {
-        o_os << to_string(&(i_stacktrace.getFrames()[0]), i_stacktrace.size());
-    }
-    return o_os;
-}
-
 }
 
 extern "C" void do_backtrace() {
-    std::cout << Stacktrace();
+    Stacktrace st;
+    int index = 0;
+    for (const Frame& fr : st.getFrames()) {
+        std::cout << std::right << std::setfill(' ') << std::setw(3) << index;
+        std::cout << fr.toString();
+        index += 1;
+    }
+    std::cout << std::endl;
 }
 
