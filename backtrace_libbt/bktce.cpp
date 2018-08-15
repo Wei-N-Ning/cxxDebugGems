@@ -41,6 +41,11 @@ string_t getBinaryFilenameLD(native_frame_ptr_t i_address) {
     return dli.dli_fname;
 }
 
+//! Must be called before any call to backtrace_pcinfo()
+//! Must be called only once!
+//! DO NOT free/delete (its storage is managed by libbacktrace)
+backtrace_state* backtraceState = nullptr;
+
 //! libbacktrace callback argument
 //! See gcc/libbacktrace/backtrace.h
 struct PCData {
@@ -131,11 +136,6 @@ _Unwind_Reason_Code unwindCallback(_Unwind_Context* i_context, void* i_state) {
 
 Frame::Frame(native_frame_ptr_t i_address)
  : m_native(i_address) {
-    backtrace_state* backtraceState = backtrace_create_state(
-        nullptr, 
-        0, 
-        &libbacktrace_error_callback, 
-        nullptr);
     PCData data = {&m_function, &m_sourceFilename, 0};
     if (backtraceState) {
         backtrace_pcinfo(
@@ -223,6 +223,12 @@ Stacktrace::Stacktrace(std::size_t i_numSkippedFrames) {
         return;
     }
 
+    //! SetUp() global state
+    backtraceState = backtrace_create_state(
+        nullptr,
+        0,
+        &libbacktrace_error_callback,
+        nullptr);
     m_frames.reserve(numFramesCollected);
     for (std::size_t i = 0; i < numFramesCollected; ++i) {
 
