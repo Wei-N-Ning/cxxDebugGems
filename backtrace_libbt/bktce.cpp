@@ -167,24 +167,11 @@ string_t AddressToSourceTranslator::getBinaryFilename(native_frame_ptr_t i_addre
 //! used as argument by _Unwind_Backtrace and its callback function;
 //! current and end delineates the array that holds the collected
 //! native frame pointers
-class UnwindState {
-public:
-    UnwindState(std::size_t i_numSkippedFrames,
-                native_frame_ptr_t* i_pointerArray,
-                std::size_t i_pointerArraySize);
-
+struct UnwindState {
     std::size_t m_numSkippedFrames;
     native_frame_ptr_t* m_current;
     native_frame_ptr_t* m_end;
 };
-
-UnwindState::UnwindState(std::size_t i_numSkippedFrames,
-                         native_frame_ptr_t* i_pointerArray,
-                         std::size_t i_pointerArraySize)
-    : m_numSkippedFrames(i_numSkippedFrames),
-      m_current(i_pointerArray),
-      m_end(i_pointerArray + i_pointerArraySize) {
-}
 
 //! this is the callback function passed to _Unwind_Backtrace;
 //! its role is to tell _Unwind_Backtrace to continue iterating the
@@ -227,35 +214,6 @@ _Unwind_Reason_Code unwindCallback(_Unwind_Context* i_context, void* i_state) {
 
     //! continue iteration
     return _URC_NO_REASON;
-}
-
-//! this is core of stacktrace: to iterate over the frames on the runtime
-//! stack; this function wraps GCC libbacktrace's _Unwind_Backtrace();
-//! the later expects a pre-allocated contiguous buffer (an array) marked
-//! by o_pointerArray and pointerArraySize and sets the frame pointer
-//! to each element from the interior the exterior;
-//! if i_numSkippedFrames is larger than 0, the first N frames are
-//! skipped; this mechanism helps the implementer to hide the bootstrapping
-//! functions (see the details in Stacktrace class)
-//!
-//! returns the actual number of frames collected
-std::size_t collectNativeFramePointers(std::size_t i_pointerArraySize,
-                                       std::size_t i_numSkippedFrames,
-                                       native_frame_ptr_t* o_pointerArray) {
-    std::size_t numFramesCollected = 0;
-    UnwindState state(i_numSkippedFrames, o_pointerArray, i_pointerArraySize);
-    _Unwind_Backtrace(&unwindCallback, &state);
-
-    //! calculate the number of collected frames (they could completely
-    //! fill or partially fill the given array)
-    numFramesCollected = 0;
-    for (std::size_t i = 0; i < i_pointerArraySize; ++i) {
-        if (o_pointerArray[i] == nullptr) {
-            break;
-        }
-        numFramesCollected++;
-    }
-    return numFramesCollected;
 }
 
 //! A textural representation of an x86_64 runtime stack-frame;
@@ -320,6 +278,20 @@ private:
     //! initialize our frame container
     void initialize();
 
+    //! this is core of stacktrace: to iterate over the frames on the runtime
+    //! stack; this function wraps GCC libbacktrace's _Unwind_Backtrace();
+    //! the later expects a pre-allocated contiguous buffer (an array) marked
+    //! by o_pointerArray and pointerArraySize and sets the frame pointer
+    //! to each element from the interior the exterior;
+    //! if i_numSkippedFrames is larger than 0, the first N frames are
+    //! skipped; this mechanism helps the implementer to hide the bootstrapping
+    //! functions (see the details in Stacktrace class)
+    //!
+    //! returns the actual number of frames collected
+    std::size_t collectNativeFramePointers(std::size_t i_pointerArraySize,
+                                           std::size_t i_numSkippedFrames,
+                                           native_frame_ptr_t* o_pointerArray);
+
     //! iterates over the native frame pointers and populate our frame
     //! container
     void populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size);
@@ -354,6 +326,29 @@ void Stacktrace::initialize() {
     //! 4) the call to collectNativeFramePointers()
     std::size_t frames_count = collectNativeFramePointers(m_maxStackSize, 4, &buf[0]);
     populateFrames(&buf[0], frames_count);
+}
+
+std::size_t Stacktrace::collectNativeFramePointers(std::size_t i_pointerArraySize,
+                                                   std::size_t i_numSkippedFrames,
+                                                   native_frame_ptr_t* o_pointerArray) {
+    std::size_t numFramesCollected = 0;
+    UnwindState state = {
+        i_numSkippedFrames,
+        o_pointerArray,
+        o_pointerArray + i_pointerArraySize,
+    };
+    _Unwind_Backtrace(&unwindCallback, &state);
+
+    //! calculate the number of collected frames (they could completely
+    //! fill or partially fill the given array)
+    numFramesCollected = 0;
+    for (std::size_t i = 0; i < i_pointerArraySize; ++i) {
+        if (o_pointerArray[i] == nullptr) {
+            break;
+        }
+        numFramesCollected++;
+    }
+    return numFramesCollected;
 }
 
 void Stacktrace::populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size) {
