@@ -43,47 +43,28 @@ struct PCData {
     std::size_t line;
 };
 
-//! libbacktrace callback function;
-//! To retrieve the source code information from the program counter 
-int libbacktrace_full_callback(void* o_data, 
-                               uintptr_t __notused, 
-                               const char* i_filename, 
-                               int i_lineno, 
-                               const char* i_function) {
-    PCData& data = *static_cast<PCData *>(o_data);
-    if (data.filename && i_filename) {
-        *data.filename = i_filename;
-    }
-    if (data.function && i_function) {
-        *data.function = i_function;
-    }
-    data.line = i_lineno;
-    return 0;
-}
-
-//! libbacktrace callback function;
-//! We don't have a use case where we would need to handle failed 
-//! backtrace operation hence the empty function body;
-void libbacktrace_error_callback(void* __notused1, 
-                                 const char* __notused2, 
-                                 int __notused3) {
-}
-
 //! Uses GCC libbacktrace to translate an address in .text section to
 //! a location in the source code;
 //! Requires the target to provide debug symbols
 class AddressToSourceTranslator {
 public:
     AddressToSourceTranslator();
-    string_t translate(native_frame_ptr_t addr);
+    string_t translate(native_frame_ptr_t i_address);
+
+    //! callback functions to be passed to GCC's libbacktrace
+    static int libbacktrace_full_callback(void*, uintptr_t, const char*, int, const char*);
+    static void libbacktrace_error_callback(void*, const char*, int);
 
 private:
-    void getSourceCodeInfo(native_frame_ptr_t i_addr);
+    void getSourceCodeInfo(native_frame_ptr_t i_address);
     bool formatSourceCodeInfo();
     string_t getBinaryFilename(native_frame_ptr_t i_address);
 
-    string_t m_formattedText;
+    //! callback state to be passed to GCC"s libstacktrace
     backtrace_state* m_backtraceState = nullptr;
+
+    //! textural data collected by the callbacks
+    string_t m_formattedText;
     string_t m_filename;
     std::size_t m_lineNumber = 0;
 };
@@ -92,17 +73,17 @@ AddressToSourceTranslator::AddressToSourceTranslator() {
     m_backtraceState = backtrace_create_state(nullptr, 
                                               0, 
                                               libbacktrace_error_callback, 
-                                              0);
+                                              nullptr);
 }
 
-string_t AddressToSourceTranslator::translate(native_frame_ptr_t addr) {
+string_t AddressToSourceTranslator::translate(native_frame_ptr_t i_address) {
     m_formattedText.clear();
-    getSourceCodeInfo(addr);
+    getSourceCodeInfo(i_address);
     if (! m_formattedText.empty()) {
         m_formattedText = demangle(m_formattedText.c_str());
     } else {
         std::stringstream ss;
-        ss << std::hex << addr;
+        ss << std::hex << i_address;
         m_formattedText = ss.str();
     }
 
@@ -112,7 +93,7 @@ string_t AddressToSourceTranslator::translate(native_frame_ptr_t addr) {
     }
 
     //! unsuccessful translation
-    string_t binaryFilename = getBinaryFilename(addr);
+    string_t binaryFilename = getBinaryFilename(i_address);
     if (! binaryFilename.empty()) {
         m_formattedText += " in ";
         m_formattedText += binaryFilename;
@@ -121,7 +102,29 @@ string_t AddressToSourceTranslator::translate(native_frame_ptr_t addr) {
     return m_formattedText;
 }
 
-void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_addr) {
+//! libbacktrace callback function;
+//! To retrieve the source code information from the program counter
+int AddressToSourceTranslator::libbacktrace_full_callback(
+    void* o_data, uintptr_t /*not used*/, const char* i_filename, int i_lineno, const char* i_function) {
+    PCData& data = *static_cast<PCData *>(o_data);
+    if (data.filename && i_filename) {
+        *data.filename = i_filename;
+    }
+    if (data.function && i_function) {
+        *data.function = i_function;
+    }
+    data.line = static_cast<std::size_t>(i_lineno);
+    return 0;
+}
+
+//! libbacktrace callback function;
+//! We don't have a use case where we would need to handle failed
+//! backtrace operation hence the empty function body;
+void AddressToSourceTranslator::libbacktrace_error_callback(
+    void* /*not used*/, const char* /*not used*/, int /*not used*/) {
+}
+
+void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_address) {
     PCData data = {
         &m_formattedText, 
         &m_filename, 
@@ -130,7 +133,7 @@ void AddressToSourceTranslator::getSourceCodeInfo(native_frame_ptr_t i_addr) {
     if (m_backtraceState) {
         backtrace_pcinfo(
             m_backtraceState,
-            reinterpret_cast<uintptr_t>(i_addr),
+            reinterpret_cast<uintptr_t>(i_address),
             &libbacktrace_full_callback,
             &libbacktrace_error_callback,
             &data
@@ -263,7 +266,7 @@ std::size_t collectNativeFramePointers(std::size_t i_pointerArraySize,
 //! use other means to inspect the frame;
 class Frame {
 public:
-    explicit Frame(native_frame_ptr_t addr);
+    explicit Frame(native_frame_ptr_t i_address);
 
     //! Returns the native frame pointer to the caller;
     native_frame_ptr_t get() const;
@@ -275,8 +278,8 @@ private:
     native_frame_ptr_t m_native;
 };
 
-Frame::Frame(native_frame_ptr_t addr) 
-    : m_native(addr) {
+Frame::Frame(native_frame_ptr_t i_address)
+    : m_native(i_address) {
 }
 
 native_frame_ptr_t Frame::get() const {
@@ -376,6 +379,9 @@ void Stacktrace::populateFrames(native_frame_ptr_t* i_begin, std::size_t i_size)
 
 extern "C" void do_backtrace() {
     Stacktrace st;
+    if (! st.isValid()) {
+        return;
+    }
     int index = 0;
     for (const Frame& fr : st.getFrames()) {
         std::cout << std::right << std::setfill(' ') << std::setw(3) << index;
