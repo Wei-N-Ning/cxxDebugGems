@@ -3,6 +3,24 @@ project(C++DebuggingTechniques)
 
 enable_testing()
 
+# ///////////////////////////
+# backtrace techniques:
+#
+# libunwind
+# is an utility that can work on multiple platforms;
+# it implements (or wraps) gnu libc's backtrace/backtrace_symbols()
+# function
+#
+# libbfd (or simply BFD):
+# binary file descriptor library is an utility that interprets various
+# binary file formats, noticeably ELF and DWARF
+
+# addr2line:
+# a program in gnu binutils project (binutils-gdb) that takes an ELF
+# executable and an address (or multiple addresses) then searches for
+# the corresponding source filename and line number;
+# it uses BFD
+
 # ////////// NOTE ///////////
 # the backtrace examples below requires debug info - the easiest way
 # is to switch cmake's build type to debug:
@@ -38,7 +56,11 @@ endif ()
 # however it heavily depends on the bits and pieces from binutils;
 # refactoring can be very difficult, at least not without lots of
 # code localizations
+# /////////////////////////
 # leave it as a future plan
+# /////////////////////////
+# see:
+# https://sourceware.org/binutils/docs/binutils/addr2line.html
 #add_subdirectory(addr2line_gnu)
 
 
