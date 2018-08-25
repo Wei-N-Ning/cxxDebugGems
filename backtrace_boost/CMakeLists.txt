@@ -1,7 +1,7 @@
 
 set(Boost_USE_STATIC_LIBS ON)
 include(${PROJECT_SOURCE_DIR}/vendor/boost_.cmake)
-find_package(Boost REQUIRED
+find_package(Boost 1.65 REQUIRED
     COMPONENTS
     # to experiment,
     # enable/disable backtrace or addr2line (and the cmake
