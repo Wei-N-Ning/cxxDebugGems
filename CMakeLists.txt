@@ -18,8 +18,8 @@ add_subdirectory(backtrace_gnu)
 # source:
 # https://cmake.org/cmake/help/v3.0/command/find_file.html
 find_file(ELF_LINK_HEADER "link.h")
-if (DEFINED ELF_LINK_HEADER)
-    message("found elf link.h header")
+if (ELF_LINK_HEADER)
+    message("found elf link.h header: ${ELF_LINK_HEADER}")
     add_subdirectory(backtrace_libbt)
 endif ()
 
