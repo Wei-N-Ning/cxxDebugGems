@@ -16,7 +16,18 @@ target_include_directories(bktce_self
     )
 
 # source:
-# stackoverflow: combining several static libraries into one using cmake
+#
+# stackoverflow:
+# https://cmake.org/pipermail/cmake/2014-August/058231.html
+# https://stackoverflow.com/questions/37924383/combining-several-static-libraries-into-one-using-cmake
+# combine multiple static libraries into one
+#
+# /////////// it is not linking! /////////////
+#
+# also read:
+# https://stackoverflow.com/questions/31209693/static-library-linked-two-times
+# this can happen if I abuses the above "aggregation" method
+#
 # some important notes:
 # 1) specify the location of the resulting archive file
 # 2) use ar
