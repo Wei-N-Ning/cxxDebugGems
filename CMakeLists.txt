@@ -11,10 +11,17 @@ enable_testing()
 find_package(Boost 1.65)
 if (Boost_FOUND)
     add_subdirectory(backtrace_boost)
-endif (Boost_FOUND)
+endif ()
 
 add_subdirectory(backtrace_gnu)
-add_subdirectory(backtrace_libbt)
+
+# source:
+# https://cmake.org/cmake/help/v3.0/command/find_file.html
+find_file(ELF_LINK_HEADER "link.h")
+if (DEFINED ELF_LINK_HEADER)
+    message("found elf link.h header")
+    add_subdirectory(backtrace_libbt)
+endif ()
 
 # lib bfd (binary file descriptor) is part of GNU binutils
 # it seems to be a side product in GDB's building process -
