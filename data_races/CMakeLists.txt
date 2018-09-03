@@ -6,11 +6,16 @@
 # flags  example:
 # https://github.com/google/sanitizers/wiki/ThreadSanitizerCppManual
 
-
 add_executable(obvious_interleaving
     obvious_interleaving.cpp)
 set(CMAKE_CXX_FLAGS
     "-std=c++14 -fsanitize=thread -fPIC")
+
+# wrap the mutable data in std::atomic
+# this gets rid of the sanitizer warning message
+# but the design is still fundamentally wrong
+add_executable(obvious_interleaving_nowarning
+    obvious_interleaving_nowarning.cpp)
 
 add_executable(obvious_interleaving_fixed
     obvious_interleaving_fixed.cpp)
