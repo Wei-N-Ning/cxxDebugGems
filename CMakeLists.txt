@@ -120,3 +120,6 @@ endif ()
 if (0)
     add_subdirectory(addr2line_gnu)
 endif()
+
+# see readme file in this directory
+add_subdirectory(data_races)
