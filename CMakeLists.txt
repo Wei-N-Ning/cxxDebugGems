@@ -123,3 +123,4 @@ endif()
 
 # see readme file in this directory
 add_subdirectory(data_races)
+add_subdirectory(memory_violation)
