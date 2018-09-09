@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 project(C++DebuggingTechniques)
 
 enable_testing()
+include(tinyCUnit/tinyCUnit.cmake)
 
 # //////////////////////////
 # // backtrace techniques //
@@ -124,3 +125,4 @@ endif()
 # see readme file in this directory
 add_subdirectory(data_races)
 add_subdirectory(memory_violation)
+add_subdirectory(subvert_class_access)

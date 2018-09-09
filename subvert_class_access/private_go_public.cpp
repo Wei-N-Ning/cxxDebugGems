@@ -9,14 +9,13 @@
 
 // P141
 // any member template can be specialized for any type. 
-// specialize it on a type that you know nody else will ever specialize 
+// specialize it on a type that you know no one else will ever specialize
 // it on (say, a type in your own unnamed namespace)
-
 
 // sut header sut.h
 class SUT {
 public:
-    SUT(int v) : m_value(v) {}
+    explicit SUT(int v) : m_value(v) {}
     template<class T>
     void f(const T& t) {}
     int value() { return m_value; }
@@ -26,6 +25,7 @@ private:
 
 void RunTinyTests();
 
+////////////////////////////////////
 // 1) dup definition
 // instead of including sut.h, manually (and illegally) duplicate sut's 
 // definition, and adds a line such as:
@@ -33,7 +33,7 @@ void RunTinyTests();
 // otherwise compilation fails
 class SUT_ {
 public:
-    SUT_(int v) : m_value(v) {}
+    explicit SUT_(int v) : m_value(v) {}
     template<class T>
     void f(const T& t) {}
     int value() { return m_value; }
@@ -45,10 +45,14 @@ void test_dup_sut() {
     s.m_value = 1337;
 }
 
+////////////////////////////////////
 // 2) macro private public
 #define private public
 
+////////////////////////////////////
 // 3) reinterpret_cast<> and class layout abusing
+// valgrind does not even give a warning about this
+// CLION does warn me about different types
 class SUT__ {
 public:
     int m_value = 0;
@@ -60,7 +64,9 @@ void test_reinterpret_cast_hack() {
     assert(1337 == sut.value());
 }
 
-// 4) abuse the member function template and inject a doer 
+////////////////////////////////////
+// 4) abuse the member function template and inject a doer
+// this technique is used multiple time in exceptional book
 struct Doer {
     void modify(int& value) const {
         value = 1337;
@@ -68,8 +74,8 @@ struct Doer {
 };
 
 template<>
-void SUT::f(const Doer& doer) {
-    doer.modify(m_value);
+void SUT::f(const Doer& t) {
+    t.modify(m_value);
 }
 
 void test_member_function_template_exploit() {
