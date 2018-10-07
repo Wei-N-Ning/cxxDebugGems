@@ -35,6 +35,13 @@ target_compile_definitions(libcallee_boost
     "BOOST_STACKTRACE_USE_BACKTRACE=1"
 #    "BOOST_STACKTRACE_USE_ADDR2LINE=1"
 )
+target_compile_options(
+    libcallee_boost
+    PRIVATE
+    "-frecord-gcc-switches"
+    "-fno-function-sections"
+    "-fno-data-sections"
+)
 target_link_libraries(libcallee_boost
     PRIVATE
     boost_static
@@ -56,7 +63,11 @@ add_executable(caller_boost
 set_target_properties(caller_boost
     PROPERTIES
     CXX_STANDARD 14)
-
+target_compile_options(caller_boost
+    PUBLIC
+    "-frecord-gcc-switches"
+    "-fno-function-sections"
+    "-fno-data-sections")
 target_link_libraries(caller_boost PUBLIC
     libcallee_boost
 )

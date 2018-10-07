@@ -71,14 +71,14 @@ target_link_libraries(callee_libbt
     bktce
     )
 
-add_executable(bt
+add_executable(caller_bt
     caller.cpp
     )
-set_target_properties(bt
+set_target_properties(caller_bt
     PROPERTIES
     CXX_STANDARD 14
     )
-target_link_libraries(bt
+target_link_libraries(caller_bt
     PRIVATE
     callee_libbt
     )
